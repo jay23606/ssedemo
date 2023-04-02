@@ -2,49 +2,137 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Server-sent events demo</title>
-</head>
-<body>
-    <button>Close the connection</button>
-
-    <ul>
-    </ul>
-
+    <title>SSE demo with OpenAI</title>
     <script>
-        const button = document.querySelector('button');
-        const evtSource = new EventSource('https://localhost:443/events');
-        console.log(evtSource.withCredentials);
-        console.log(evtSource.readyState);
-        console.log(evtSource.url);
-        const eventList = document.querySelector('ul');
+        function runDemo() {
+            const button = document.getElementById("close-connection");
+            const evtSource = new EventSource('https://localhost:443/events');
+            console.log(evtSource.withCredentials);
+            console.log(evtSource.readyState);
+            console.log(evtSource.url);
+            const eventList = document.getElementById("event-list");
 
-        evtSource.onopen = function () {
-            console.log("Connection to server opened.");
-        };
+            evtSource.onopen = function () {
+                console.log("Connection to server opened.");
+            };
 
-        evtSource.onmessage = function (e) {
-            const newElement = document.createElement("li");
+            evtSource.onmessage = function (e) {
+                const newElement = document.createElement("li");
+                newElement.textContent = "message: " + e.data;
+                eventList.appendChild(newElement);
+            };
 
-            newElement.textContent = "message: " + e.data;
-            eventList.appendChild(newElement);
-        };
+            evtSource.onerror = function () {
+                console.log("EventSource failed.");
+            };
 
-        evtSource.onerror = function () {
-            console.log("EventSource failed.");
-        };
+            button.onclick = function () {
+                console.log('Connection closed');
+                evtSource.close();
+            };
 
-        button.onclick = function () {
-            console.log('Connection closed');
-            evtSource.close();
-        };
+            evtSource.addEventListener("ping", function (e) {
+                let newElement = document.createElement("li");
 
-      // evtSource.addEventListener("ping", function(e) {
-      //   var newElement = document.createElement("li");
-      //
-      //   var obj = JSON.parse(e.data);
-      //   newElement.innerHTML = "ping at " + obj.time;
-      //   eventList.appendChild(newElement);
-      // }, false);
+                let obj = JSON.parse(e.data);
+                newElement.innerHTML = "ping at " + obj.time;
+                eventList.appendChild(newElement);
+            }, false);
+        }
+
+        async function openAiSendClick() {
+            const token = document.getElementById("openai-api-key").value;
+            const prompt = document.getElementById("openai-prompt").value;
+            const eventList = document.getElementById("openai-event-list");
+            const outputDiv = document.getElementById("openai-chunk-output");
+
+            //I asked: how would I accomplish SSE with fetch and POST?
+            //While SSE(Server - Sent Events) uses HTTP GET requests to establish a connection between the client and the server,
+            //it's still possible to use the fetch API to receive SSE messages by sending a POST request to the server and setting
+            //the Content - Type header to text / event - stream.Here's how you can accomplish this:
+
+            let jsonBody = JSON.stringify({
+                model: "gpt-3.5-turbo",
+                temperature: 0.8,
+                stream: true,
+                messages: [{
+                    role: "user",
+                    content: prompt
+                }]
+            });
+            //alert(jsonBody);
+            const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    //'Content-Type': 'text/event-stream', //doesn't work 
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: jsonBody
+            });
+            let chatOutput = []
+            const reader = response.body.getReader();
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) {
+                    console.log('Stream closed');
+
+                    //show it on the page as well like we did before
+                    const newElement = document.createElement("li");
+                    newElement.textContent = "Stream closed"
+                    eventList.appendChild(newElement);
+                    break;
+                }
+                const textDecoder = new TextDecoder();
+                const chunk = textDecoder.decode(value, { stream: true });
+
+                console.log(chunk);
+                //show it on the page as well like we did before
+                const newElement = document.createElement("li");
+                newElement.textContent = "message: " + chunk;
+                eventList.appendChild(newElement);
+
+                const lines = chunk.split('\n');
+                for (let i in lines) {
+                    if (lines[i].length === 0) continue;
+                    if (lines[i].startsWith(':')) continue;
+                    if (lines[i] === 'data: [DONE]') return; //may want to return chatOutput or outputDiv.innerText to an oncomplete handler
+
+                    //substring(6) takes out the "data: " portion on the front
+                    let json = JSON.parse(lines[i].substring(6));
+                    if (json.choices) {
+                        chatOutput.push(json.choices[0].delta.content || '')
+                        //show the output the way humans read it
+                        outputDiv.innerText = chatOutput.join('');
+                    }
+                }
+
+            }
+
+        }
+
+
     </script>
+</head>
+<body onload="runDemo()">
+
+    Server-sent events demo data from server run locally
+    <button id="close-connection">Close the connection</button>
+    <div style="height:25vh;overflow:auto;border:1px solid black">
+        <ul id="event-list">
+        </ul>
+    </div>
+
+    <br /><hr /><br />
+
+    Enter OpenAI api key: <br /><input type="text" id="openai-api-key" style="width:50vw" /><br />
+    Enter a prompt for ChatGPT: <br /><input type="text" id="openai-prompt" style="width:50vw" value="tell me a joke" />
+    <button id="openai-send" onclick="openAiSendClick()">Send</button>
+    <div style="height:25vh;overflow:auto;border:1px solid black">
+        <ul id="openai-event-list">
+        </ul>
+    </div>
+    <div id="openai-chunk-output" style="white-space:pre-wrap;height:25vh;overflow:auto;border:1px solid black">
+    </div>
 </body>
 </html>
